@@ -413,19 +413,27 @@ class _TrackedConnection(redis.Connection):
 		# keys.
 		self.register_connect_callback(self._enable_client_tracking)
 
+#LF: Modify to fix the RESP2 not supported by Dragonfly and RESP3
 	def _enable_client_tracking(self, conn):
-		try:
-			conn.send_command("CLIENT", "TRACKING", "ON", "redirect", self._invalidator_id, "NOLOOP")
-			conn.read_response()
-		except ResponseError as e:
-			if "client ID" in str(e) and "does not exist" in str(e):
-				# Redis restarted, there's no easy way to recover from this.
-				frappe.client_cache.healthy = False
-			elif "unknown subcommand" in str(e).lower():
-				raise Exception("Redis version is not supported, upgrade to Redis 6.0 or higher.")
-			else:
-				raise
-
+	    try:
+	        conn.send_command("CLIENT", "TRACKING", "ON", "redirect", self._invalidator_id, "NOLOOP")
+	        conn.read_response()
+	    except ResponseError as e:
+	        msg = str(e)
+	        if "client ID" in msg and "does not exist" in msg:
+	            # Redis restarted, there's no easy way to recover from this.
+	            frappe.client_cache.healthy = False
+	        elif "unknown subcommand" in msg.lower():
+	            raise Exception("Redis version is not supported, upgrade to Redis 6.0 or higher.")
+	        elif "client tracking is currently not supported" in msg.lower() or "resp2" in msg.lower():
+	            # Dragonfly (or other RESP2 backends) that don't support tracking:
+	            # just skip tracking instead of crashing.
+	            frappe.logger().warning(
+	                f"Redis client tracking not enabled (likely Dragonfly/RESP2): {e}"
+	            )
+	            return
+	        else:
+	            raise
 
 CachedValue = namedtuple("CachedValue", ["value", "expiry"])
 CacheStatistics = namedtuple(

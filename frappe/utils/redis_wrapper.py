@@ -501,12 +501,13 @@ class ClientCache:
 
 		if not self.invalidator_id:
 			return
-
+#Patch for Dragonfly RESP3 Error
 		self.redis: RedisWrapper = RedisWrapper.from_url(
 			frappe.conf.get("redis_cache"),
 			connection_class=_TrackedConnection,
 			_invalidator_id=self.invalidator_id,
-			protocol=2,
+			protocol=3,
+			maint_notifications_config=MaintNotificationsConfig(enabled=False),
 		)
 		self.invalidator_thread = self.run_invalidator_thread()
 

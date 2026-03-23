@@ -12,6 +12,8 @@ import redis
 import redis.exceptions
 from redis.commands.search import Search
 from redis.exceptions import ResponseError
+#Change to patch Dragonfly RESP3 Error
+from redis.maint_notifications import MaintNotificationsConfig
 
 import frappe
 from frappe.utils import cstr
@@ -373,12 +375,20 @@ def setup_cache() -> RedisWrapper:
 			master_username=frappe.conf.get("redis_cache_master_username"),
 			master_password=frappe.conf.get("redis_cache_master_password"),
 		)
+#Patch For REDIS3 Error		
 		return sentinel.master_for(
 			frappe.conf.get("redis_cache_master_service"),
 			redis_class=RedisWrapper,
+			protocol=3,
+			maint_notifications_config=MaintNotificationsConfig(enabled=False),
 		)
 
-	return RedisWrapper.from_url(frappe.conf.get("redis_cache"))
+#Patch For REDIS3 Error
+	return RedisWrapper.from_url(
+		frappe.conf.get("redis_cache"),
+		protocol=3,
+		maint_notifications_config=MaintNotificationsConfig(enabled=False),
+	)
 
 
 def get_sentinel_connection(

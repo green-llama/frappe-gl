@@ -423,22 +423,19 @@ class _TrackedConnection(redis.Connection):
 		# keys.
 		self.register_connect_callback(self._enable_client_tracking)
 
-#FIX Included for RESP3
-def _enable_client_tracking(self, conn):
-    try:
-        conn.send_command("CLIENT", "TRACKING", "ON", "redirect", self._invalidator_id, "NOLOOP")
-        conn.read_response()
-    except ResponseError as e:
-        if "client ID" in str(e) and "does not exist" in str(e):
-            frappe.client_cache.healthy = False
-        elif (
-            "unknown subcommand" in str(e).lower()
-            or "syntax error" in str(e).lower()
-        ):
-            # FIX for Redis Version Redis >6
-            pass
-        else:
-            raise
+	# FIX Included for RESP3
+	def _enable_client_tracking(self, conn):
+		try:
+			conn.send_command("CLIENT", "TRACKING", "ON", "redirect", self._invalidator_id, "NOLOOP")
+			conn.read_response()
+		except ResponseError as e:
+			if "client ID" in str(e) and "does not exist" in str(e):
+				frappe.client_cache.healthy = False
+			elif "unknown subcommand" in str(e).lower() or "syntax error" in str(e).lower():
+				# FIX for Redis Version Redis >6
+				pass
+			else:
+				raise
 
 
 CachedValue = namedtuple("CachedValue", ["value", "expiry"])

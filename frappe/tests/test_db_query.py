@@ -271,6 +271,33 @@ class TestDBQuery(IntegrationTestCase):
 				result in DatabaseQuery("DocType").execute(filters={"name": ["not in", "DocType,DocField"]})
 			)
 
+	def test_in_filter_json_encoded_values(self):
+		# JSON-encoded list string should work the same as comma-separated
+		for result in [{"name": "DocType"}, {"name": "DocField"}]:
+			self.assertTrue(
+				result
+				in DatabaseQuery("DocType").execute(filters={"name": ["in", '["DocType", "DocField"]']})
+			)
+
+		# Values containing commas must not be split
+		todo = frappe.get_doc(
+			doctype="ToDo", description="Test, With Comma", allocated_to="Administrator"
+		).insert()
+		try:
+			results = DatabaseQuery("ToDo").execute(
+				filters={"description": ["in", '["Test, With Comma"]']},
+				fields=["description"],
+			)
+			self.assertIn({"description": "Test, With Comma"}, results)
+
+			results_split = DatabaseQuery("ToDo").execute(
+				filters={"description": ["in", "Test, With Comma"]},
+				fields=["description"],
+			)
+			self.assertNotIn({"description": "Test, With Comma"}, results_split)
+		finally:
+			frappe.delete_doc("ToDo", todo.name)
+
 	def test_string_as_field(self):
 		self.assertEqual(
 			frappe.get_all("DocType", as_list=True), frappe.get_all("DocType", fields="name", as_list=True)
@@ -990,11 +1017,14 @@ class TestDBQuery(IntegrationTestCase):
 		from frappe.desk.doctype.dashboard_settings.dashboard_settings import (
 			create_dashboard_settings,
 		)
+		from frappe.model.db_query import DatabaseQuery
 
 		self.doctype = "Dashboard Settings"
 		self.user = "test'5@example.com"
 
-		permission_query_conditions = DatabaseQuery.get_permission_query_conditions(self)
+		db_query = DatabaseQuery(self.doctype, user=self.user)
+
+		permission_query_conditions = db_query.get_permission_query_conditions()
 
 		create_dashboard_settings(self.user)
 
@@ -1050,15 +1080,21 @@ class TestDBQuery(IntegrationTestCase):
 		self.assertNotIn("IF", frappe.get_all("User", {"first_name": ("in", ["a", "b"])}, run=0).get_sql())
 		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("in", ["a", None])}, run=0).get_sql())
 		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("in", ["a", ""])}, run=0).get_sql())
-		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("in", [])}, run=0).get_sql())
+		# Empty list with IN should return 1=0, not use IFNULL
+		self.assertIn("1=0", frappe.get_all("User", {"first_name": ("in", [])}, run=0).get_sql())
+		self.assertNotIn("IFNULL", frappe.get_all("User", {"first_name": ("in", [])}, run=0).get_sql())
 		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("not in", ["a"])}, run=0).get_sql())
-		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("not in", [])}, run=0).get_sql())
+		# Empty list with NOT IN should return 1=1, not use IFNULL
+		self.assertIn("1=1", frappe.get_all("User", {"first_name": ("not in", [])}, run=0).get_sql())
+		self.assertNotIn("IFNULL", frappe.get_all("User", {"first_name": ("not in", [])}, run=0).get_sql())
 		self.assertIn("IFNULL", frappe.get_all("User", {"first_name": ("not in", [""])}, run=0).get_sql())
 
 		# primary key is never nullable
 		self.assertNotIn("IFNULL", frappe.get_all("User", {"name": ("in", ["a", None])}, run=0).get_sql())
 		self.assertNotIn("IFNULL", frappe.get_all("User", {"name": ("in", ["a", ""])}, run=0).get_sql())
 		self.assertNotIn("IFNULL", frappe.get_all("User", {"name": ("in", (""))}, run=0).get_sql())
+		# Empty tuple with IN should return 1=0, not use IFNULL
+		self.assertIn("1=0", frappe.get_all("User", {"name": ("in", ())}, run=0).get_sql())
 		self.assertNotIn("IFNULL", frappe.get_all("User", {"name": ("in", ())}, run=0).get_sql())
 
 	def test_coalesce_with_datetime_ops(self):
@@ -1142,6 +1178,68 @@ class TestDBQuery(IntegrationTestCase):
 		# Shouldn't raise pymysql.err.OperationalError: (1066, "Not unique table/alias: 'tabToDo'")
 		data = get()
 		self.assertEqual(len(data["values"]), 1)
+
+	def test_self_referential_link_joins(self):
+		"""Test that joined aliases are distinct, when a DocType has multiple links to itself."""
+
+		if not frappe.db.exists("DocType", "Self Linked DocType"):
+			frappe.get_doc(
+				{
+					"doctype": "DocType",
+					"custom": 1,
+					"module": "Custom",
+					"name": "Self Linked DocType",
+					"naming_rule": "Random",
+					"autoname": "hash",
+					"fields": [
+						{
+							"label": "Title",
+							"fieldname": "title",
+							"fieldtype": "Data",
+						},
+						{
+							"label": "Parent Ref",
+							"fieldname": "parent_ref",
+							"fieldtype": "Link",
+							"options": "Self Linked DocType",
+						},
+						{
+							"label": "Sibling Ref",
+							"fieldname": "sibling_ref",
+							"fieldtype": "Link",
+							"options": "Self Linked DocType",
+						},
+					],
+				}
+			).insert()
+		else:
+			frappe.db.delete("Self Linked DocType")
+
+		first_link = frappe.get_doc({"doctype": "Self Linked DocType", "title": "Reference1"}).insert()
+		second_link = frappe.get_doc({"doctype": "Self Linked DocType", "title": "Reference2"}).insert()
+		frappe.get_doc(
+			{
+				"doctype": "Self Linked DocType",
+				"title": "Linked Doc",
+				"parent_ref": first_link.name,
+				"sibling_ref": second_link.name,
+			}
+		).insert()
+
+		fields = ["name", "parent_ref.title as parent_title", "sibling_ref.title as sibling_title"]
+		data = frappe.get_all(
+			"Self Linked DocType",
+			fields=fields,
+		)
+		self.assertEqual(len(data), 3)
+
+		query = frappe.qb.get_query(
+			"Self Linked DocType",
+			fields=fields,
+		).get_sql()
+
+		self.assertIn("LEFT JOIN `tabSelf Linked DocType` `tabSelf Linked DocType_parent_ref`", query)
+		self.assertIn("LEFT JOIN `tabSelf Linked DocType` `tabSelf Linked DocType_sibling_ref`", query)
 
 	def test_select_star_expansion(self):
 		count = frappe.get_list("Language", [{"SUM": 1}, {"COUNT": "*"}], as_list=1, order_by=None)[0]

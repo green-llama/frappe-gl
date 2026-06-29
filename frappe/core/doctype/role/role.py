@@ -80,7 +80,7 @@ class Role(Document):
 		users_with_same_user_type = frappe.get_all("User", {"user_type": role_user_type}, pluck="name")
 
 		for user_name in set(users_with_role) - set(users_with_same_user_type):
-			user = frappe.get_doc("User", user_name)
+			user = frappe.get_lazy_doc("User", user_name)
 			user_type = user.user_type
 			user.set_system_user()
 			if user_type != user.user_type:
@@ -89,6 +89,12 @@ class Role(Document):
 
 def get_info_based_on_role(role, field="email", ignore_permissions=False):
 	"""Get information of all users that have been assigned this role"""
+	# Administrator is a superuser account, not a typical role with assigned users
+	# so we resolve it directly to the Administrator user
+	if role == "Administrator":
+		user = frappe.db.get_value("User", "Administrator", field)
+		return [user] if user else []
+
 	users = frappe.get_list(
 		"Has Role",
 		filters={"role": role, "parenttype": "User"},

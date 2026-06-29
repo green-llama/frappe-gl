@@ -25,7 +25,6 @@ frappe.pages["print"].on_page_load = function (wrapper) {
 				: frappe.route_options.frm.frm;
 			frappe.route_options.frm = null;
 			let meta = print_view.frm.meta;
-			meta.module && frappe.app.sidebar.show_sidebar_for_module(meta.module);
 			print_view.show(print_view.frm);
 		}
 	});
@@ -206,22 +205,6 @@ frappe.ui.form.PrintView = class {
 		this.set_breadcrumbs();
 		this.setup_customize_dialog();
 
-		// print designer link
-		if (!cint(frappe.boot.sysdefaults.disable_product_suggestion)) {
-			if (Object.keys(frappe.boot.versions).includes("print_designer")) {
-				this.page.add_inner_message(`
-				<a style="line-height: 2.4" href="/desk/print-designer?doctype=${this.frm.doctype}">
-					${__("Try the new Print Designer")}
-				</a>
-				`);
-			} else {
-				this.page.add_inner_message(`
-				<a style="line-height: 2.4" href="https://frappecloud.com/marketplace/apps/print_designer?utm_source=framework-desk&utm_medium=print-view&utm_campaign=try-link">
-					${__("Try the new Print Designer")}
-				</a>
-				`);
-			}
-		}
 		let tasks = [
 			this.set_default_print_format,
 			this.set_default_print_language,
@@ -400,14 +383,20 @@ frappe.ui.form.PrintView = class {
 	}
 
 	set_default_letterhead() {
-		if (this.frm.doc.letter_head) {
-			this.letterhead_selector.val(this.frm.doc.letter_head);
-			return;
-		}
+		const get_default = () =>
+			frappe.db
+				.get_value("Letter Head", { disabled: 0, is_default: 1 }, "name")
+				.then(({ message }) => {
+					if (message?.name) this.letterhead_selector.val(message.name);
+				});
+
+		if (!this.frm.doc.letter_head) return get_default();
 
 		return frappe.db
-			.get_value("Letter Head", { disabled: 0, is_default: 1 }, "name")
-			.then(({ message }) => this.letterhead_selector.val(message.name));
+			.get_value("Letter Head", { name: this.frm.doc.letter_head, disabled: 0 }, "name")
+			.then(({ message }) =>
+				message?.name ? this.letterhead_selector.val(message.name) : get_default()
+			);
 	}
 
 	set_user_lang() {
@@ -706,7 +695,10 @@ frappe.ui.form.PrintView = class {
 				return;
 			}
 		} else {
-			this.is_wkhtmltopdf_valid();
+			let pdf_generator = this.get_pdf_generator(print_format?.pdf_generator);
+			if (pdf_generator === "wkhtmltopdf") {
+				this.is_wkhtmltopdf_valid();
+			}
 			this.render_page(
 				"/api/method/frappe.utils.print_format.download_pdf?",
 				false,

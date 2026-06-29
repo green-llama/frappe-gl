@@ -608,6 +608,8 @@ frappe.ui.form.Form = class FrappeForm {
 					toolbar: this.toolbar,
 				});
 				this.sidebar.make();
+			} else {
+				this.page.sidebar.hide();
 			}
 
 			// clear layout message
@@ -657,13 +659,19 @@ frappe.ui.form.Form = class FrappeForm {
 	configure_breadcrumb_width() {
 		let el = this.page.page_actions[0];
 		const rect = el.getBoundingClientRect();
-		let is_outside = rect.right > document.documentElement.clientWidth;
+		let is_outside = cint(rect.right) > cint(document.documentElement.clientWidth);
+
 		if (is_outside) {
 			// check if the default actions are outside of the screen
 			const overflow = Math.max(0, rect.right - document.documentElement.clientWidth);
-			this.page.$title_area
-				.parent()
-				.css("max-width", overflow ? `calc(50% - ${overflow}px)` : "50%");
+
+			if (!overflow) return;
+			let max_breadcrumb_width = Math.max(
+				290,
+				this.page.$title_area.find("ul").width() - overflow
+			);
+
+			this.page.$title_area.parent().css("max-width", `${max_breadcrumb_width}px`);
 			let breadcrumb = this.page.$title_area.find("ul li.ellipsis");
 
 			if (cint(breadcrumb[0]?.clientWidth) <= 30) {
@@ -774,6 +782,7 @@ frappe.ui.form.Form = class FrappeForm {
 		this.show_submit_message();
 		this.clear_custom_buttons();
 		this.show_web_link();
+		this.show_report_bug_link();
 		this.show_workflow_read_only_banner();
 	}
 
@@ -1271,6 +1280,17 @@ frappe.ui.form.Form = class FrappeForm {
 		}
 	}
 
+	show_report_bug_link() {
+		if (this.meta.beta) {
+			this.add_web_link(
+				"https://github.com/frappe/" +
+					frappe.boot.module_app[frappe.scrub(this.meta.module)] +
+					"/issues/new",
+				__("Report bug")
+			);
+		}
+	}
+
 	add_web_link(path, label) {
 		label = __(label) || __("See on Website");
 		this.web_link = this.sidebar
@@ -1334,7 +1354,11 @@ frappe.ui.form.Form = class FrappeForm {
 		frappe.re_route[frappe.router.get_sub_path()] = `${encodeURIComponent(
 			frappe.router.slug(this.doctype)
 		)}/${encodeURIComponent(name)}`;
-		!frappe._from_link && frappe.set_route("Form", this.doctype, name);
+
+		// Skip routing only when the document is created from a Form view's Link field
+		if (!frappe._from_link?.field_obj?.frm) {
+			frappe.set_route("Form", this.doctype, name);
+		}
 	}
 
 	// ACTIONS
@@ -1508,7 +1532,9 @@ frappe.ui.form.Form = class FrappeForm {
 		if (group && group.indexOf("fa fa-") !== -1) group = null;
 
 		let btn = this.page.add_inner_button(label, fn, group);
-
+		if (btn) {
+			this.custom_buttons[label] = btn;
+		}
 		return btn;
 	}
 
@@ -1551,15 +1577,10 @@ frappe.ui.form.Form = class FrappeForm {
 			var scroll_to = frappe.route_options.scroll_to;
 			delete frappe.route_options.scroll_to;
 
-			var selector = [];
-			for (var key in scroll_to) {
-				var value = scroll_to[key];
-				selector.push(repl('[data-%(key)s="%(value)s"]', { key: key, value: value }));
-			}
-
-			selector = $(selector.join(" "));
-			if (selector.length) {
-				frappe.utils.scroll_to(selector);
+			if (this.scroll_to_field(scroll_to)) {
+				const url = new URL(window.location);
+				url.searchParams.delete("scroll_to");
+				history.replaceState(null, null, url);
 			}
 		} else if (window.location.hash) {
 			if ($(window.location.hash).length) {
@@ -1596,13 +1617,16 @@ frappe.ui.form.Form = class FrappeForm {
 		$.each(fields_list, function (i, fname) {
 			var docfield = frappe.meta.docfield_map[doctype][fname];
 			if (docfield) {
-				var label = __(docfield.label || "", null, docfield.parent).replace(
-					/\([^\)]*\)/g,
-					""
-				); // eslint-disable-line
+				// Preserve the pristine label before any currency suffix is applied,
+				// so we don't have to strip it back out of a mutated value on reset
+				// (which would also destroy legitimate parentheticals like "Rate (ex-tax)").
+				if (docfield._original_label === undefined) {
+					docfield._original_label = docfield.label;
+				}
+				var label = __(docfield._original_label || "", null, docfield.parent);
 				if (parentfield) {
 					grid_field_label_map[doctype + "-" + fname] =
-						label.trim() + " (" + __(currency) + ")";
+						label.trim() + " (" + currency + ")";
 				} else {
 					field_label_map[fname] = label.trim() + " (" + currency + ")";
 				}
@@ -1616,6 +1640,35 @@ frappe.ui.form.Form = class FrappeForm {
 		$.each(grid_field_label_map, function (fname, label) {
 			fname = fname.split("-");
 			me.fields_dict[parentfield].grid.update_docfield_property(fname[1], "label", label);
+		});
+	}
+
+	reset_currency_labels(fields, parentfield) {
+		if (!fields.length) return;
+
+		const doctype = parentfield
+			? this.fields_dict[parentfield].grid.doctype
+			: this.doc.doctype;
+
+		fields.forEach((field) => {
+			const docfield = frappe.meta.docfield_map[doctype][field];
+			if (docfield) {
+				// Read the pristine label captured by set_currency_labels (or here on first use)
+				if (docfield._original_label === undefined) {
+					docfield._original_label = docfield.label;
+				}
+				const label = __(docfield._original_label || "", null, docfield.parent);
+
+				if (parentfield) {
+					this.fields_dict[parentfield].grid.update_docfield_property(
+						field,
+						"label",
+						label
+					);
+				} else {
+					this.fields_dict[field].set_label(label);
+				}
+			}
 		});
 	}
 

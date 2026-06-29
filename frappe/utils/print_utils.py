@@ -2,8 +2,6 @@ import os
 import re
 from typing import Literal
 
-import click
-
 import frappe
 from frappe.utils.data import cint, cstr
 
@@ -95,6 +93,15 @@ def get_print(
 			)
 			# if hook returns a value, assume it was the correct pdf_generator and return it
 			if pdf:
+				if output and isinstance(pdf, bytes):
+					from io import BytesIO
+
+					from pypdf import PdfReader
+
+					reader = PdfReader(BytesIO(pdf))
+					for page in reader.pages:
+						output.add_page(page)
+					return output
 				return pdf
 
 	for hook in frappe.get_hooks("on_print_pdf"):
@@ -121,7 +128,12 @@ def attach_print(
 	from frappe.utils.pdf import get_pdf
 
 	print_settings = frappe.db.get_singles_dict("Print Settings")
-
+	if print_letterhead and not letterhead:
+		if not doc:
+			doc = frappe.get_cached_doc(doctype, name)
+		letterhead = doc.get("letter_head") or frappe.get_cached_value(
+			"Letter Head", {"is_default": 1}, "name"
+		)
 	kwargs = dict(
 		print_format=print_format,
 		style=style,
@@ -133,16 +145,27 @@ def attach_print(
 
 	frappe.local.flags.ignore_print_permissions = True
 
+	is_weasyprint_print_format = False
+	if print_format and print_format != "Standard":
+		print_format_doc = frappe.get_cached_doc("Print Format", print_format)
+		is_weasyprint_print_format = print_format_doc.get("print_format_builder_beta")
+
 	with print_language(lang or frappe.local.lang):
 		content = ""
 		if cint(print_settings.send_print_as_pdf):
 			ext = ".pdf"
-			kwargs["as_pdf"] = True
-			content = (
-				get_pdf(html, options={"password": password} if password else None)
-				if html
-				else get_print(doctype, name, **kwargs)
-			)
+			if html:
+				content = get_pdf(html, options={"password": password} if password else None)
+			elif is_weasyprint_print_format:
+				from frappe.utils.weasyprint import PrintFormatGenerator
+
+				doc_obj = doc or frappe.get_cached_doc(doctype, name)
+				letterhead_name = letterhead if print_letterhead else None
+				generator = PrintFormatGenerator(print_format, doc_obj, letterhead_name)
+				content = generator.render_pdf()
+			else:
+				kwargs["as_pdf"] = True
+				content = get_print(doctype, name, **kwargs)
 		else:
 			ext = ".html"
 			content = html or scrub_urls(get_print(doctype, name, **kwargs)).encode("utf-8")
@@ -158,8 +181,9 @@ def attach_print(
 
 def setup_chromium():
 	"""Setup Chromium at the bench level."""
-	# Load Chromium version from common_site_config.json or use default
+	import click
 
+	# Load Chromium version from common_site_config.json or use default
 	try:
 		executable = find_or_download_chromium_executable()
 		click.echo(f"Chromium is already set up at {executable}")
@@ -174,6 +198,8 @@ def find_or_download_chromium_executable():
 	import platform
 	import shutil
 	from pathlib import Path
+
+	import click
 
 	if chromium_path := shutil.which(frappe.get_common_site_config().get("chromium_path", "")):
 		return chromium_path
@@ -194,6 +220,8 @@ def find_or_download_chromium_executable():
 	if not exec_path.exists():
 		click.echo("Chromium is not available. downloading...")
 		download_chromium()
+	else:
+		make_chromium_executable(str(exec_path))
 
 	if not exec_path.exists():
 		click.echo("Error while downloading chrome")
@@ -206,6 +234,7 @@ def download_chromium():
 	import shutil
 	import zipfile
 
+	import click
 	import requests
 
 	bench_path = frappe.utils.get_bench_path()
@@ -355,6 +384,8 @@ def get_chromium_download_url():
 
 def make_chromium_executable(executable):
 	"""Make the Chromium executable."""
+	import click
+
 	if os.path.exists(executable):
 		# check if the file is executable
 		if os.access(executable, os.X_OK):

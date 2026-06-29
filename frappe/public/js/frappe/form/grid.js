@@ -31,6 +31,10 @@ export default class Grid {
 			this.meta = frappe.get_meta(this.doctype);
 		}
 		this.fields_map = {};
+		// per-grid column visibility overrides set via `set_column_disp`. Kept
+		// grid-local (rather than mutating the shared meta docfield) so two grids
+		// of the same child doctype on the same form don't affect each other.
+		this.column_disp_overrides = {};
 		this.template = null;
 		this.multiple_set = false;
 		if (
@@ -87,6 +91,10 @@ export default class Grid {
 								data-action="delete_rows">
 								${__("Delete")}
 							</button>
+							<button type="button" class="btn btn-xs btn-secondary grid-edit-rows hidden"
+								data-action="bulk_edit_rows">
+								${__("Edit")}
+							</button>
 							<button type="button" class="btn btn-xs btn-danger grid-remove-all-rows hidden"
 							data-action="delete_all_rows">
 							${__("Delete all")}
@@ -135,6 +143,7 @@ export default class Grid {
 		this.grid_buttons = this.wrapper.find(".grid-buttons");
 		this.grid_custom_buttons = this.wrapper.find(".grid-custom-buttons");
 		this.remove_rows_button = this.grid_buttons.find(".grid-remove-rows");
+		this.edit_rows_button = this.grid_buttons.find(".grid-edit-rows");
 		this.duplicate_rows_button = this.grid_buttons.find(".grid-duplicate-rows");
 		this.remove_all_rows_button = this.grid_buttons.find(".grid-remove-all-rows");
 
@@ -224,7 +233,7 @@ export default class Grid {
 
 			// toggle "Add row" button
 			this.wrapper
-				.find(".grid-add-row")
+				.find(".grid-add-row, .grid-add-multiple-rows")
 				.toggleClass(
 					"hidden",
 					num_selected_rows > 0 ||
@@ -235,13 +244,16 @@ export default class Grid {
 			// update "Delete" and "Duplicate" button labels
 			if (num_selected_rows == 1) {
 				this.remove_rows_button.text(__("Delete row"));
+				this.edit_rows_button.text(__("Edit row"));
 				this.duplicate_rows_button.text(__("Duplicate row"));
 			} else {
 				this.remove_rows_button.text(__("Delete {0} rows", [num_selected_rows]));
+				this.edit_rows_button.text(__("Edit {0} rows", [num_selected_rows]));
 				this.duplicate_rows_button.text(__("Duplicate {0} rows", [num_selected_rows]));
 			}
 
 			this.refresh_remove_rows_button();
+			this.refresh_edit_rows_button();
 			this.refresh_duplicate_rows_button();
 		});
 	}
@@ -351,7 +363,10 @@ export default class Grid {
 			? false
 			: true;
 		this.remove_rows_button.toggleClass("hidden", show_buttons);
-		this.duplicate_rows_button.toggleClass("hidden", show_buttons);
+		this.duplicate_rows_button.toggleClass(
+			"hidden",
+			show_buttons || this.cannot_add_rows || (this.df && this.df.cannot_add_rows)
+		);
 
 		let select_all_checkbox_checked = this.wrapper.find(
 			".grid-heading-row .grid-row-check:checked:first"
@@ -365,13 +380,25 @@ export default class Grid {
 		}
 	}
 
+	refresh_edit_rows_button() {
+		if (!this.meta?.allow_bulk_edit) {
+			this.edit_rows_button.toggleClass("hidden", true);
+			return;
+		}
+
+		const show_button = this.wrapper.find(".grid-body .grid-row-check:checked:first").length
+			? true
+			: false;
+		this.edit_rows_button.toggleClass("hidden", !show_button);
+	}
+
 	debounced_refresh_remove_rows_button = frappe.utils.debounce(
 		this.refresh_remove_rows_button,
 		100
 	);
 
 	refresh_duplicate_rows_button() {
-		if (this.df.cannot_add_rows) {
+		if (this.df.cannot_add_rows || (this.df && this.df.cannot_add_rows)) {
 			return;
 		}
 
@@ -387,13 +414,7 @@ export default class Grid {
 	);
 
 	get_selected() {
-		return (this.grid_rows || [])
-			.map((row) => {
-				return row.doc.__checked ? row.doc.name : null;
-			})
-			.filter((d) => {
-				return d;
-			});
+		return (this.data || []).filter((doc) => doc.__checked).map((doc) => doc.name);
 	}
 
 	get_selected_children() {
@@ -501,12 +522,11 @@ export default class Grid {
 			this.grid_rows = [];
 		}
 
-		this.truncate_rows();
 		/** @type {Record<string, GridRow>} */
 		this.grid_rows_by_docname = {};
 
 		this.grid_pagination.update_page_numbers();
-		this.render_result_rows($rows, false);
+		this.render_result_rows($rows);
 		this.grid_pagination.check_page_number();
 		this.wrapper.find(".grid-empty").toggleClass("hidden", Boolean(this.data.length));
 
@@ -527,19 +547,36 @@ export default class Grid {
 		this.form_grid.toggleClass("error", !!(this.df.reqd && !(this.data && this.data.length)));
 
 		this.refresh_remove_rows_button();
+		this.refresh_edit_rows_button();
 		this.refresh_duplicate_rows_button();
 
 		this.wrapper.trigger("change");
 	}
 
-	render_result_rows($rows, append_row) {
+	render_result_rows($rows) {
+		if (!$rows) {
+			$rows = $(this.parent).find(".rows");
+		}
+
 		let result_length = this.grid_pagination.get_result_length();
 		let page_index = this.grid_pagination.page_index;
 		let page_length = this.grid_pagination.page_length;
+		let page_start = (page_index - 1) * page_length;
 		if (!this.grid_rows) {
 			return;
 		}
-		for (var ri = (page_index - 1) * page_length; ri < result_length; ri++) {
+
+		// index existing rows by doc object reference for identity-based matching
+		let rows_by_doc = new Map();
+		for (let row of this.grid_rows) {
+			if (row?.doc) {
+				rows_by_doc.set(row.doc, row);
+			}
+		}
+
+		let matched_rows = new Set();
+
+		for (var ri = page_start; ri < result_length; ri++) {
 			var d = this.data[ri];
 			if (!d) {
 				return;
@@ -550,10 +587,10 @@ export default class Grid {
 			if (d.name === undefined) {
 				d.name = this.get_random_name();
 			}
-			let grid_row;
-			if (this.grid_rows[ri] && !append_row) {
-				grid_row = this.grid_rows[ri];
-				grid_row.doc = d;
+
+			let grid_row = rows_by_doc.get(d);
+			if (grid_row) {
+				matched_rows.add(grid_row);
 				grid_row.refresh();
 			} else {
 				grid_row = new GridRow({
@@ -564,16 +601,50 @@ export default class Grid {
 					frm: this.frm,
 					grid: this,
 				});
-				this.grid_rows[ri] = grid_row;
 			}
-
+			this.grid_rows[ri] = grid_row;
 			this.grid_rows_by_docname[d.name] = grid_row;
+		}
+
+		// remove stale / invisible rows
+		for (let [, row] of rows_by_doc) {
+			if (!matched_rows.has(row)) {
+				row.wrapper.remove();
+			}
+		}
+
+		// reorder DOM from the first mismatch onward
+		let $children = $rows.children();
+		let page_count = result_length - page_start;
+		let reorder_from = -1;
+		for (let i = 0; i < page_count; i++) {
+			if ($children.get(i) !== this.grid_rows[page_start + i].wrapper.get(0)) {
+				reorder_from = i;
+				break;
+			}
+		}
+		if (reorder_from >= 0) {
+			for (let ri = page_start + reorder_from; ri < result_length; ri++) {
+				$rows.append(this.grid_rows[ri].wrapper);
+			}
+		}
+
+		// clear non-visible slots to prevent duplicates and stale references
+		for (let i = 0; i < this.grid_rows.length; i++) {
+			if (i < page_start || i >= result_length) {
+				delete this.grid_rows[i];
+			}
+		}
+
+		if (this.grid_rows.length > this.data.length) {
+			this.grid_rows.length = this.data.length;
 		}
 	}
 
 	setup_toolbar() {
-		if (this.is_editable()) {
-			this.wrapper.find(".grid-footer").toggle(true);
+		const is_editable = this.is_editable();
+		if (is_editable) {
+			this.wrapper.find(".grid-footer").removeClass("hidden");
 
 			const num_selected_rows = this.get_selected_children().length;
 			// show, hide buttons to add rows
@@ -598,23 +669,14 @@ export default class Grid {
 			this.grid_rows.length < this.grid_pagination.page_length &&
 			!this.df.allow_bulk_edit
 		) {
-			this.wrapper.find(".grid-footer").toggle(false);
+			this.wrapper.find(".grid-footer").addClass("hidden");
 		}
 
+		// don't be tempted to use the `.hidden` class here
+		// it is used in other logic for the same buttons and will cause conflicts
 		this.wrapper
 			.find(".grid-add-row, .grid-add-multiple-rows, .grid-upload")
-			.toggle(this.is_editable());
-	}
-
-	truncate_rows() {
-		if (this.grid_rows.length > this.data.length) {
-			// remove extra rows
-			for (var i = this.data.length; i < this.grid_rows.length; i++) {
-				var grid_row = this.grid_rows[i];
-				if (grid_row) grid_row.wrapper.remove();
-			}
-			this.grid_rows.splice(this.data.length);
-		}
+			.toggleClass("d-none", !is_editable);
 	}
 
 	setup_fields() {
@@ -643,8 +705,24 @@ export default class Grid {
 			this.docfields = this.df.fields;
 		}
 
+		this._apply_column_disp_overrides();
+
 		this.docfields.forEach((df) => {
 			this.fields_map[df.fieldname] = df;
+		});
+	}
+
+	_apply_column_disp_overrides() {
+		const fieldnames = Object.keys(this.column_disp_overrides || {});
+		if (!fieldnames.length) return;
+
+		// Replace overridden fields with a shallow copy carrying the grid-local
+		// `hidden` value. The base docfield comes from `frappe.meta` and is shared
+		// across every grid of the same child doctype on this form, so it must not
+		// be mutated in place.
+		this.docfields = this.docfields.map((df) => {
+			if (!(df.fieldname in this.column_disp_overrides)) return df;
+			return Object.assign({}, df, { hidden: this.column_disp_overrides[df.fieldname] });
 		});
 	}
 
@@ -786,6 +864,31 @@ export default class Grid {
 		this.debounced_refresh();
 	}
 
+	set_column_disp_in_list_view(fieldname, show) {
+		// Show/hide a column in this grid's list view (the static, read-only row
+		// rendering). Unlike `set_column_disp`, the change is kept as a grid-local
+		// override and never mutates the shared meta docfield, so other grids of
+		// the same child doctype on the same form are unaffected. The override is
+		// applied to a grid-local docfield copy in `_apply_column_disp_overrides`
+		// (called from `setup_fields`).
+		const fieldnames = Array.isArray(fieldname) ? fieldname : [fieldname];
+		for (let field of fieldnames) {
+			this.column_disp_overrides[field] = show ? 0 : 1;
+		}
+
+		// Tear down the cached column layout and the rendered rows so the new
+		// column set is rebuilt with consistent widths. Just clearing
+		// `visible_columns` is not enough: the header is rebuilt with redistributed
+		// `col-N` widths while already-rendered rows keep their old widths, leaving
+		// the grid misaligned. This mirrors `reset_grid()` (also used by the
+		// Configure Columns dialog).
+		this.visible_columns = [];
+		this.grid_rows = [];
+		$(this.parent).find(".grid-body .grid-row").remove();
+
+		this.debounced_refresh();
+	}
+
 	set_editable_grid_column_disp(fieldname, show) {
 		//Hide columns for editable grids
 		if (this.meta.editable_grid && this.grid_rows) {
@@ -798,8 +901,17 @@ export default class Grid {
 
 							//Show the static area and hide field area if it is not the editable row
 							if (row != frappe.ui.form.editable_row) {
-								column.static_area.show();
-								column.field_area && column.field_area.toggle(false);
+								if (
+									row.should_show_button_in_idle_grid_cell &&
+									row.should_show_button_in_idle_grid_cell(column)
+								) {
+									row.make_control(column);
+									column.static_area.hide();
+									column.field_area && column.field_area.toggle(true);
+								} else {
+									column.static_area.show();
+									column.field_area && column.field_area.toggle(false);
+								}
 							}
 							//Hide the static area and show field area if it is the editable row
 							else {
@@ -988,6 +1100,171 @@ export default class Grid {
 		return d;
 	}
 
+	bulk_edit_rows() {
+		if (!this.meta?.allow_bulk_edit) return;
+
+		const selected_children = this.get_selected_children();
+		if (!selected_children.length) {
+			frappe.show_alert({ message: __("No rows selected"), indicator: "orange" });
+			return;
+		}
+
+		const is_field_editable = (field_doc) => {
+			const parent_docstatus = this.frm?.doc?.docstatus;
+			const is_submitted_or_cancelled = [1, 2].includes(parent_docstatus);
+
+			return (
+				field_doc.fieldname &&
+				frappe.model.is_value_type(field_doc) &&
+				field_doc.fieldtype !== "Read Only" &&
+				!field_doc.hidden &&
+				!field_doc.read_only &&
+				!field_doc.is_virtual &&
+				(!is_submitted_or_cancelled || field_doc.allow_on_submit)
+			);
+		};
+
+		const editable_fields = (this.docfields || []).filter((field_doc) =>
+			is_field_editable(field_doc)
+		);
+		if (!editable_fields.length) {
+			frappe.msgprint(__("No editable fields available for bulk edit."));
+			return;
+		}
+
+		const grid = this;
+
+		const field_mappings = {};
+		editable_fields.forEach((field_doc) => {
+			const field_key = `${field_doc.label}`;
+			field_mappings[field_key] = Object.assign({}, field_doc);
+		});
+
+		const field_options = Object.keys(field_mappings).sort((a, b) =>
+			__(cstr(field_mappings[a].label)).localeCompare(cstr(__(field_mappings[b].label)))
+		);
+		const field_autocomplete_options = field_options.map((key) => ({
+			label: __(cstr(field_mappings[key].label)),
+			value: key,
+		}));
+		const status_regex = /status/i;
+		const default_field =
+			field_options.find((value) => status_regex.test(value)) ||
+			field_options.find((value) => field_mappings[value]?.fieldtype === "Select");
+
+		// One child row drives Link get_query(cb, doc, cdt, cdn) / locals lookups in bulk-edit dialog.
+		// Multiple rows selected may diverge — filters follow the first selected row only.
+		const bulk_edit_reference_row = selected_children[0];
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("Bulk Edit"),
+			...(bulk_edit_reference_row && {
+				frm: this.frm,
+				doc: bulk_edit_reference_row,
+				doctype: bulk_edit_reference_row.doctype,
+			}),
+			fields: [
+				{
+					fieldtype: "Autocomplete",
+					options: field_autocomplete_options,
+					max_items: Infinity,
+					default: default_field,
+					label: __("Field"),
+					fieldname: "field",
+					reqd: 1,
+					onchange: () => {
+						set_value_field(dialog);
+					},
+				},
+				{
+					fieldtype: "Data",
+					label: __("Value"),
+					fieldname: "value",
+					onchange() {
+						show_help_text();
+					},
+				},
+			],
+			primary_action: ({ value }) => {
+				const selected_field = field_mappings[dialog.get_value("field")];
+				const { fieldname } = selected_field;
+				dialog.disable_primary_action();
+
+				const update_value = value || null;
+				const tasks = selected_children.map((doc) =>
+					frappe.model.set_value(doc.doctype, doc.name, fieldname, update_value)
+				);
+
+				Promise.all(tasks).then(() => {
+					this.frm && this.frm.dirty();
+					this.refresh();
+					dialog.hide();
+					const row_label = selected_children.length === 1 ? __("row") : __("rows");
+					frappe.show_alert(
+						__("Updated {0} selected {1}. Save the form to keep changes.", [
+							selected_children.length,
+							row_label,
+						])
+					);
+				});
+			},
+			primary_action_label: __("Update {0} rows", [selected_children.length]),
+		});
+
+		if (default_field) set_value_field(dialog);
+		show_help_text();
+
+		function set_value_field(dialogObj) {
+			const field_value = dialogObj.get_value("field");
+			if (!field_value || !field_mappings[field_value]) return;
+			const new_df = Object.assign({}, field_mappings[field_value]);
+			if (
+				new_df.label?.match(status_regex) &&
+				new_df.fieldtype === "Select" &&
+				!new_df.default
+			) {
+				let options = [];
+				if (typeof new_df.options === "string") {
+					options = new_df.options.split("\n");
+				}
+				new_df.default = options[0] || options[1];
+			}
+			new_df.label = __("Value");
+			new_df.onchange = show_help_text;
+			delete new_df.depends_on;
+
+			const grid_field = grid.get_field(new_df.fieldname);
+			if (grid_field?.get_query) {
+				new_df.get_query = grid_field.get_query;
+			}
+
+			dialogObj.replace_field("value", new_df);
+			// replace_field does not re-run attach_doc; Link needs docname + doctype for set_query third arg.
+			if (bulk_edit_reference_row) {
+				dialogObj.attach_doc_and_docfields(true);
+			}
+			show_help_text();
+		}
+
+		function show_help_text() {
+			if (dialog.get_primary_btn().is(":focus, :active")) return;
+
+			let value = dialog.get_value("value");
+			if (value == null || value === "") {
+				dialog.set_df_property(
+					"value",
+					"description",
+					__("You have not entered a value. The field will be set to empty.")
+				);
+			} else {
+				dialog.set_df_property("value", "description", "");
+			}
+		}
+
+		dialog.refresh();
+		dialog.show();
+	}
+
 	set_focus_on_row(idx) {
 		if (!idx && idx !== 0) {
 			idx = this.grid_rows.length - 1;
@@ -1102,7 +1379,9 @@ export default class Grid {
 		if (user_settings && user_settings[this.doctype] && user_settings[this.doctype].length) {
 			this.user_defined_columns = user_settings[this.doctype]
 				.map((row) => {
-					let column = frappe.meta.get_docfield(this.doctype, row.fieldname);
+					let column =
+						this.docfields?.find((d) => d.fieldname === row.fieldname) ||
+						frappe.meta.get_docfield(this.doctype, row.fieldname);
 
 					if (column) {
 						column.in_list_view = 1;
@@ -1312,7 +1591,9 @@ export default class Grid {
 		}
 
 		for (let row of this.grid_rows) {
-			let docfield = row?.docfields?.find((d) => d.fieldname === fieldname);
+			if (!row) continue;
+
+			let docfield = row.docfields?.find((d) => d.fieldname === fieldname);
 			if (docfield) {
 				docfield[property] = value;
 			} else {
@@ -1336,7 +1617,7 @@ export default class Grid {
 	get_current_row(target) {
 		let current_row = null;
 		for (let i = 0; i < this.grid_rows.length; i++) {
-			if (this.grid_rows[i].wrapper.get(0).contains(target)) {
+			if (this.grid_rows[i]?.wrapper.get(0).contains(target)) {
 				current_row = i;
 			}
 		}

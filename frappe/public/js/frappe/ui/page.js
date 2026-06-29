@@ -67,8 +67,6 @@ frappe.ui.Page = class Page {
 					(frappe.boot.read_only || frappe.boot.user.impersonated_by)
 				) {
 					$(".page-head").css("top", "-15px");
-				} else if (frappe.boot.read_only || frappe.boot.user.impersonated_by) {
-					$(".page-head").css("top", "var(--navbar-height)");
 				}
 				last_scroll = current_scroll;
 			}, 500)
@@ -145,7 +143,7 @@ frappe.ui.Page = class Page {
 		this.container = this.wrapper.find(".page-body");
 		this.sidebar = this.wrapper.find(".layout-side-section");
 		this.footer = this.wrapper.find(".layout-footer");
-		this.indicator = this.wrapper.find(".indicator-pill");
+		this.indicator = this.wrapper.find(".title-area .indicator-pill");
 
 		this.page_actions = this.wrapper.find(".page-actions");
 		this.filters = this.wrapper.find(".filters");
@@ -161,6 +159,7 @@ frappe.ui.Page = class Page {
 
 		this.standard_actions = this.page_actions.find(".standard-actions");
 		this.custom_actions = this.page_actions.find(".custom-actions");
+		this.custom_mobile_actions = this.page_actions.find(".custom-mobile-actions");
 
 		this.page_form = $('<div class="page-form row hide"></div>').prependTo(this.main);
 		this.inner_toolbar = this.custom_actions;
@@ -172,7 +171,12 @@ frappe.ui.Page = class Page {
 
 		// keyboard shortcuts
 		let menu_btn = this.menu_btn_group.find("button");
-		menu_btn.attr("title", __("Menu")).tooltip({ delay: { show: 600, hide: 100 } });
+		menu_btn
+			.attr("title", __("Menu"))
+			.tooltip({ delay: { show: 600, hide: 100 } })
+			.on("click mousedown", function () {
+				$(this).tooltip("hide");
+			});
 		frappe.ui.keys
 			.get_shortcut_group(this.page_actions[0])
 			.add(menu_btn, menu_btn.find(".menu-btn-group-label"));
@@ -204,7 +208,17 @@ frappe.ui.Page = class Page {
 	}
 
 	set_indicator(label, color) {
-		this.clear_indicator().removeClass("hide").html(`<span>${label}</span>`).addClass(color);
+		let indicator_html = `<span>${label}</span>`;
+		const is_mobile = frappe.is_mobile();
+		if (is_mobile) {
+			indicator_html = `<span class="indicator-doc-html" style="background-color: var(--${color}-400)"></span>`;
+		}
+		this.clear_indicator().removeClass("hide").html(indicator_html).addClass(color);
+
+		if (is_mobile) {
+			this.indicator.attr("title", label);
+			this.indicator.tooltip();
+		}
 	}
 
 	add_action_icon(icon, click, css_class = "", tooltip_label) {
@@ -233,7 +247,7 @@ frappe.ui.Page = class Page {
 	}
 
 	setup_main_sidebar_toggle() {
-		$(".sidebar-toggle-btn.navbar-brand").on("click", (event) => {
+		this.wrapper.find(".sidebar-toggle-btn.navbar-brand").on("click", (event) => {
 			frappe.app.sidebar.set_height();
 			frappe.app.sidebar.toggle_width();
 			frappe.app.sidebar.prevent_scroll();
@@ -440,7 +454,9 @@ frappe.ui.Page = class Page {
 		let $icon = ``;
 
 		if (icon) {
-			$icon = `<span class="menu-item-icon">${frappe.utils.icon(icon)}</span>`;
+			$icon = `<span class="menu-item-icon flex align-items-center justify-items-center">${frappe.utils.icon(
+				icon
+			)}</span>`;
 		}
 
 		if (shortcut) {
@@ -450,9 +466,7 @@ frappe.ui.Page = class Page {
 					<a class="grey-link dropdown-item" href="#" onClick="return false;">
 						${$icon}
 						<span class="menu-item-label">${label}</span>
-						<kbd class="pull-right">
-							<span>${shortcut_obj.shortcut_label}</span>
-						</kbd>
+						<span class="menu-item-shortcut">${shortcut_obj.shortcut_label}</span>
 					</a>
 				</li>
 			`);
@@ -505,16 +519,7 @@ frappe.ui.Page = class Page {
 		} else {
 			shortcut_obj = shortcut;
 		}
-		// label
-		if (frappe.utils.is_mac()) {
-			shortcut_obj.shortcut_label = shortcut_obj.shortcut
-				.replace("Ctrl", "⌘")
-				.replace("Alt", "⌥");
-		} else {
-			shortcut_obj.shortcut_label = shortcut_obj.shortcut;
-		}
-
-		shortcut_obj.shortcut_label = shortcut_obj.shortcut_label.replace("Shift", "⇧");
+		shortcut_obj.shortcut_label = frappe.ui.keys.get_shortcut_label(shortcut_obj.shortcut);
 
 		// actual shortcut string
 		shortcut_obj.shortcut = shortcut_obj.shortcut.toLowerCase();
@@ -591,7 +596,7 @@ frappe.ui.Page = class Page {
 	btn_disable_enable(btn, response) {
 		if (response && response.then) {
 			btn.prop("disabled", true);
-			response.then(() => {
+			response.finally(() => {
 				btn.prop("disabled", false);
 			});
 		} else if (response && response.always) {
@@ -796,7 +801,8 @@ frappe.ui.Page = class Page {
 			</div>
 		`);
 
-		if (!parent) parent = this.custom_actions;
+		if (!parent)
+			parent = frappe.is_mobile() ? this.custom_mobile_actions : this.custom_actions;
 		parent.removeClass("hide").append(custom_btn_group);
 
 		return custom_btn_group.find(".dropdown-menu");

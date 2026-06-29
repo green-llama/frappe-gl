@@ -31,6 +31,7 @@ frappe.views.BaseList = class BaseList {
 			this.setup_main_section,
 			this.setup_view,
 			this.setup_view_menu,
+			this.setup_resize_handler,
 		].map((fn) => fn.bind(this));
 
 		this.init_promise = frappe.run_serially(tasks);
@@ -275,16 +276,15 @@ frappe.views.BaseList = class BaseList {
 		frappe.breadcrumbs.add(this.meta.module, this.doctype);
 	}
 
-	show_or_hide_sidebar() {
-		let show_sidebar = JSON.parse(localStorage.show_sidebar || "true");
-		$(document.body).toggleClass("no-list-sidebar", !show_sidebar);
+	hide_sidebar() {
+		$(document.body).toggleClass("no-list-sidebar", true);
 	}
 
 	setup_main_section() {
 		return frappe.run_serially(
 			[
 				this.setup_list_wrapper,
-				this.show_or_hide_sidebar,
+				this.hide_sidebar,
 				this.setup_filter_area,
 				this.setup_sort_selector,
 				this.setup_result_container_area,
@@ -430,17 +430,32 @@ frappe.views.BaseList = class BaseList {
 		});
 	}
 
+	setup_resize_handler() {
+		$(window)
+			.off("resize.list-view")
+			.on(
+				"resize.list-view",
+				frappe.utils.debounce(() => {
+					if (cur_list?.$result?.is(":visible")) {
+						cur_list.set_result_height();
+					}
+				}, 300)
+			);
+	}
+
 	set_result_height() {
 		if (this.view !== "List") return;
 		this.$result[0].style.removeProperty("height");
 		// place it at the footer of the page
 
-		let resultContainerHeight = window.innerHeight - this.$paging_area.get(0).offsetHeight;
-		if (!frappe.is_mobile()) {
-			resultContainerHeight = resultContainerHeight - this.$result.get(0).offsetTop;
-		}
-		this.$result.parent(".result-container").css({
-			height: resultContainerHeight - (frappe.is_mobile() ? 100 : 0) + "px",
+		let $result_container = this.$result.parent(".result-container");
+		let main_rect = $(".main-section").get(0).getBoundingClientRect();
+		let result_top = $result_container.get(0).getBoundingClientRect().top - main_rect.top;
+		let resultContainerHeight = Math.floor(
+			main_rect.height - this.$paging_area.get(0).getBoundingClientRect().height - result_top
+		);
+		$result_container.css({
+			height: resultContainerHeight + "px",
 		});
 
 		this.$result[0].style.height =
@@ -647,14 +662,21 @@ class FilterArea {
 		this.setup();
 		if (frappe.is_mobile()) this.setup_mobile(list_view);
 	}
+
 	setup_mobile(list_view) {
 		const me = this;
 		this.standard_filters_visible = false;
-		this.standard_filters_wrapper.hide();
+		this.standard_filters_wrapper?.hide();
 		this.list_view.page.page_form.css("justify-content", "flex-end");
+		list_view.page.page_form.addClass("flex-column");
+		this.$filter_list_wrapper.addClass("justify-between p-0");
+
+		// added this to manage spaceing between filter and sorf area
+		this.$filter_list_wrapper.find(".filter-selector").css("margin", "0 0 0 auto");
+
 		$(`<button class="filter-toggle btn btn-default btn-sm filter-button">
 					<span class="filter-icon button-icon">
-						${frappe.utils.icon("funnel-plus")}
+						${frappe.utils.icon("chevrons-up-down")}
 					</span>
 				</button>
 			</div>`)
@@ -674,11 +696,6 @@ class FilterArea {
 			this.standard_filters_visible = true;
 			this.standard_filters_wrapper.show();
 		}
-		let icon_name = !this.standard_filters_visible ? "funnel-plus" : "funnel-x";
-		this.$filter_list_wrapper
-			.find(".filter-toggle")
-			.find("use")
-			.attr("href", `#icon-${icon_name}`);
 	}
 
 	setup() {
@@ -1047,7 +1064,7 @@ class FilterArea {
 
 	apply_filter(fieldname, value) {
 		let operator = "=";
-		if (value === "") {
+		if (value === "" || (fieldname === "_user_tags" && value === __("No Tags"))) {
 			operator = "is";
 			value = "not set";
 		}
@@ -1127,13 +1144,22 @@ class FilterArea {
 		let fields = [];
 
 		if (!this.list_view.settings.hide_name_filter) {
-			fields.push({
+			let field = {
 				fieldtype: "Data",
 				label: "ID",
 				condition: "like",
 				fieldname: "name",
 				onchange: () => this.debounced_refresh_list_view(),
-			});
+			};
+
+			if (frappe.is_mobile()) {
+				let mobile_id_filter = this.$filter_list_wrapper.append(
+					`<div class="mobile-id-filter"></div>`
+				);
+				this.list_view.page.add_field(field, mobile_id_filter.find(".mobile-id-filter"));
+			} else {
+				fields.push(field);
+			}
 		}
 
 		if (
@@ -1307,7 +1333,10 @@ class FilterArea {
 					field.set_value(value.replace(/^%+|%+$/g, ""));
 				}
 
-				this.debounced_refresh_list_view();
+				// Only trigger refresh if field has a value
+				if (value) {
+					this.debounced_refresh_list_view();
+				}
 			});
 		}, 100);
 	}
@@ -1319,7 +1348,7 @@ class FilterArea {
 			let field = fields_dict[key];
 			let value = field.get_value();
 			if (value) {
-				let match_type = field.df.match_type || "=";
+				let match_type = field.df.match_type || field.df.condition || "=";
 				let condition;
 
 				if (match_type === "like") {

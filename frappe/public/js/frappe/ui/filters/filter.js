@@ -203,7 +203,9 @@ frappe.ui.Filter = class {
 		this._filter_value_set = Promise.resolve();
 
 		if (["in", "not in"].includes(condition) && Array.isArray(value)) {
-			value = value.join(",");
+			value = value.some((v) => String(v).includes(","))
+				? JSON.stringify(value)
+				: value.join(",");
 		}
 
 		if (Array.isArray(value)) {
@@ -485,7 +487,15 @@ frappe.ui.filter_utils = {
 			}
 		} else if (["in", "not in"].includes(condition)) {
 			if (val) {
-				val = val.split(",").map((v) => strip(v));
+				try {
+					const parsed = JSON.parse(val);
+					val = Array.isArray(parsed) ? parsed : [String(parsed)];
+				} catch {
+					val = val
+						.split(",")
+						.map((v) => strip(v))
+						.filter((v) => v != null && v !== "");
+				}
 			}
 		} else if (frappe.boot.additional_filters_config[condition]) {
 			val = field.value || val;
@@ -505,7 +515,10 @@ frappe.ui.filter_utils = {
 
 	get_default_condition(df) {
 		const meta = frappe.get_meta(df.parent);
-		if (df.fieldtype == "Data" && !meta?.is_large_table) {
+		if (["_assign", "_liked_by"].includes(df.fieldname)) {
+			// stored as a JSON array, so an exact match can never hit
+			return "like";
+		} else if (df.fieldtype == "Data" && !meta?.is_large_table) {
 			return "like";
 		} else if (df.fieldtype == "Date" || df.fieldtype == "Datetime") {
 			return "Between";

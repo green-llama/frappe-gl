@@ -53,25 +53,14 @@ export default class GridRow {
 		this.wrapper.appendTo(this.parent);
 	}
 
-	set_docfields(update = false) {
+	set_docfields() {
 		if (this.doc && this.parent_df.options) {
-			frappe.meta.make_docfield_copy_for(
+			this.docfields = frappe.meta.get_docfields(
 				this.parent_df.options,
 				this.doc.name,
-				this.docfields
+				null,
+				this.grid.docfields
 			);
-			const docfields = frappe.meta.get_docfields(this.parent_df.options, this.doc.name);
-			if (update) {
-				// to maintain references
-				this.docfields.forEach((df) => {
-					Object.assign(
-						df,
-						docfields.find((d) => d.fieldname === df.fieldname)
-					);
-				});
-			} else {
-				this.docfields = docfields;
-			}
 		}
 	}
 
@@ -198,11 +187,6 @@ export default class GridRow {
 		);
 	}
 	refresh() {
-		// update docfields for new record
-		if (this.frm && this.doc && this.doc.__islocal) {
-			this.set_docfields(true);
-		}
-
 		if (this.frm && this.doc) {
 			this.doc = locals[this.doc.doctype][this.doc.name];
 		}
@@ -308,10 +292,12 @@ export default class GridRow {
 						delete this.grid.filter["row-index"];
 					}
 
-					this.grid.grid_sortable.option(
-						"disabled",
-						Object.keys(this.grid.filter).length !== 0
-					);
+					if (this.grid.grid_sortable) {
+						this.grid.grid_sortable.option(
+							"disabled",
+							Object.keys(this.grid.filter).length !== 0
+						);
+					}
 
 					this.grid.prevent_build = true;
 					me.grid.refresh();
@@ -347,6 +333,10 @@ export default class GridRow {
 			// remove row
 			if (!this.open_form_button) {
 				this.open_form_button = $('<div class="col"></div>').appendTo(this.row);
+				this.open_form_button.on("click", function (e) {
+					me.toggle_view();
+					return false;
+				});
 
 				if (!this.configure_columns) {
 					const edit_msg = __("Edit", "", "Edit grid row");
@@ -354,12 +344,8 @@ export default class GridRow {
 						<div class="btn-open-row" data-toggle="tooltip" data-placement="right" title="${edit_msg}">
 							<a>${frappe.utils.icon("edit", "xs")}</a>
 						</div>
-					`)
-						.appendTo(this.open_form_button)
-						.on("click", function () {
-							me.toggle_view();
-							return false;
-						});
+					`).appendTo(this.open_form_button);
+
 					$(this.open_form_button)
 						.parent()
 						.on("keydown", function (ev) {
@@ -502,16 +488,29 @@ export default class GridRow {
 
 		d.set_primary_action(__("Add"), () => {
 			let selected_fields = d.get_values().fields;
+			const existing_settings = {};
+			this.selected_columns_for_grid.forEach((col) => {
+				existing_settings[col.fieldname] = col;
+			});
+
 			this.selected_columns_for_grid = [];
 			if (selected_fields) {
 				selected_fields.forEach((selected_column) => {
-					let docfield = frappe.meta.get_docfield(this.grid.doctype, selected_column);
-					this.grid.update_default_colsize(docfield);
+					if (existing_settings[selected_column]) {
+						this.selected_columns_for_grid.push(existing_settings[selected_column]);
+					} else {
+						let docfield = frappe.meta.get_docfield(
+							this.grid.doctype,
+							selected_column
+						);
+						this.grid.update_default_colsize(docfield);
 
-					this.selected_columns_for_grid.push({
-						fieldname: selected_column,
-						columns: docfield.columns || docfield.colsize,
-					});
+						this.selected_columns_for_grid.push({
+							fieldname: selected_column,
+							columns: docfield.columns || docfield.colsize,
+							sticky: docfield.sticky,
+						});
+					}
 				});
 
 				this.render_selected_columns();
@@ -596,18 +595,17 @@ export default class GridRow {
 							<div class='col-3' style='padding-top: 2px; margin-top:-2px;' title='${__("Columns")}'>
 								<input class='form-control column-width my-1 input-xs text-right'
 								style='height: 24px; max-width: 80px; background: var(--bg-color);'
-									value='${docfield.columns || cint(d.columns)}'
+									value='${cint(d.columns) || docfield.columns}'
 									data-fieldname='${docfield.fieldname}' style='background-color: var(--modal-bg); display: inline'>
 							</div>
-							<div class='col-2' title='${__("Sticky")}'>
+							<div class='col-2 sticky-col-container' title='${__("Sticky")}' >
 								<input type='checkbox' class='form-control sticky-column'
-									style='margin-top: 8px'
-									${docfield.sticky ? "checked" : ""}
-									data-fieldname='${docfield.fieldname}' style='background-color: var(--modal-bg); display: inline'>
+									${d.sticky ? "checked" : ""}
+									data-fieldname='${d.fieldname}' style='background-color: var(--modal-bg); display: inline'>
 							</div>
 							<div class='col-1' style='padding-top: 3px;'>
 								<a class='text-muted remove-field' data-fieldname='${docfield.fieldname}'>
-									<i class='fa fa-trash-o' aria-hidden='true'></i>
+									${frappe.utils.icon("trash", "xs")}
 								</a>
 							</div>
 						</div>
@@ -642,6 +640,7 @@ export default class GridRow {
 			this.selected_columns_for_grid.push({
 				fieldname: $(columns[idx]).attr("data-fieldname"),
 				columns: cint($(columns[idx]).find(".column-width").attr("value")),
+				sticky: $(columns[idx]).find(".sticky-column").is(":checked") ? 1 : 0,
 			});
 		});
 	}
@@ -745,7 +744,12 @@ export default class GridRow {
 
 			total_colsize += colsize;
 			let txt = this.doc
-				? frappe.format(this.doc[df.fieldname], df, null, this.doc)
+				? frappe.format(
+						this._escape_for_format(this.doc[df.fieldname], df),
+						df,
+						null,
+						this.doc
+				  )
 				: __(df.label, null, df.parent);
 
 			if (this.doc && df.fieldtype === "Select") {
@@ -774,9 +778,7 @@ export default class GridRow {
 			}
 		});
 
-		let current_grid = $(
-			`div[data-fieldname="${this.grid.df.fieldname}"] .form-grid-container`
-		);
+		let current_grid = this.grid.wrapper.find(".form-grid-container");
 		if (total_colsize > 10) {
 			current_grid.addClass("column-limit-reached");
 		} else if (current_grid.hasClass("column-limit-reached")) {
@@ -795,6 +797,30 @@ export default class GridRow {
 			// last empty column
 			$(`<div class="col grid-static-col search"></div>`).appendTo(this.row);
 		}
+
+		// Button has no stored value; static_area stays empty while field_area is hidden until the row
+		// becomes "editable". Keep the control visible for Button columns in editable grids.
+		this.columns_list.forEach((column) => {
+			if (this.should_show_button_in_idle_grid_cell(column)) {
+				this.make_control(column);
+				column.static_area.toggle(false);
+				column.field_area.toggle(true);
+			}
+		});
+	}
+
+	/**
+	 * Button fields only: show the real control even when this row is not the active editable row.
+	 * Scope is intentionally narrow to avoid changing behaviour of value fields.
+	 */
+	should_show_button_in_idle_grid_cell(column) {
+		return (
+			column.df.fieldtype === "Button" &&
+			this.grid.allow_on_grid_editing() &&
+			this.grid.is_editable() &&
+			this.doc &&
+			!column.df.hidden
+		);
 	}
 
 	set_dependant_property(df) {
@@ -841,9 +867,6 @@ export default class GridRow {
 		} else if (expression.substr(0, 5) == "eval:") {
 			try {
 				out = frappe.utils.eval(expression.substr(5), { doc, parent });
-				if (parent && parent.istable && expression.includes("is_submittable")) {
-					out = true;
-				}
 			} catch (e) {
 				frappe.throw(__('Invalid "depends_on" expression'));
 			}
@@ -1028,7 +1051,7 @@ export default class GridRow {
 		}
 
 		function trigger_focus(input_field, col_df) {
-			if (["Date", "Datetime"].includes(col_df.fieldtype) && col_df?.read_only) {
+			if (["Date", "Datetime", "Time"].includes(col_df.fieldtype) && col_df?.read_only) {
 				return;
 			}
 
@@ -1047,33 +1070,28 @@ export default class GridRow {
 			.on("focusin", function (event) {
 				if (is_focused) return;
 				is_focused = true;
-				if (df.fieldtype === "Link" || df.fieldtype === "Dynamic Link") {
-					frappe.utils.sleep(300).then(() => {
-						let $dropdown = $(this).find(".awesomplete > ul:first-of-type");
-						let $grid_field = $dropdown.closest(".grid-field");
+				if (["Link", "Dynamic Link", "Autocomplete"].includes(df.fieldtype)) {
+					let $dropdown = $(this).find(".awesomplete > ul:first-of-type");
+					let $grid_field = $dropdown.closest(".grid-field");
 
-						if ($grid_field.length) {
-							let $wrapper = $grid_field.find("div.awesomplete");
-							$wrapper = $(
-								`<div class="awesomplete ${$dropdown.attr("id")}"></div>`
-							);
-							$grid_field.append($wrapper);
-							$wrapper.append($dropdown);
+					if ($grid_field.length) {
+						let $wrapper = $grid_field.find("div.awesomplete");
+						$wrapper = $(`<div class="awesomplete ${$dropdown.attr("id")}"></div>`);
+						$grid_field.append($wrapper);
+						$wrapper.append($dropdown);
 
-							let element_position = event.target.getBoundingClientRect();
+						let element_position = event.target.getBoundingClientRect();
 
-							let left_difference =
-								element_position.left - $grid_field.offset().left;
-							let top_difference =
-								element_position.top - $grid_field.offset().top + 30;
-							$wrapper.css({
-								position: "absolute",
-								top: `${top_difference + 10}px`,
-								left: `${left_difference}px`,
-								width: "250px",
-							});
-						}
-					});
+						let left_difference = element_position.left - $grid_field.offset().left;
+						let top_difference = element_position.top - $grid_field.offset().top + 30;
+						$wrapper.css({
+							position: "absolute",
+							top: `${top_difference + 10}px`,
+							left: `${left_difference}px`,
+							minWidth: "250px",
+							width: `${element_position.width}px`,
+						});
+					}
 				}
 			})
 			.on("click", function (event) {
@@ -1172,17 +1190,28 @@ export default class GridRow {
 					let df = this.grid.visible_columns[index][0];
 
 					let txt = this.doc
-						? frappe.format(this.doc[df.fieldname], df, null, this.doc)
+						? frappe.format(
+								this._escape_for_format(this.doc[df.fieldname], df),
+								df,
+								null,
+								this.doc
+						  )
 						: __(df.label, null, df.parent);
 
 					this.refresh_field(df.fieldname, txt);
 				}
 
-				if (!column.df.hidden) {
-					column.static_area.toggle(true);
-				}
+				if (this.should_show_button_in_idle_grid_cell(column)) {
+					this.make_control(column);
+					column.static_area.toggle(false);
+					column.field_area.toggle(true);
+				} else {
+					if (!column.df.hidden) {
+						column.static_area.toggle(true);
+					}
 
-				column.field_area && column.field_area.toggle(false);
+					column.field_area && column.field_area.toggle(false);
+				}
 			});
 			frappe.ui.form.editable_row = null;
 		}
@@ -1530,6 +1559,23 @@ export default class GridRow {
 			this.grid.grid_pagination.go_to_page(new_page);
 		}
 	}
+	// Escape plain-text field values before passing to frappe.format(), so the formatted
+	// output is safe to inject via .html(). Mirrors the same pre-escaping in base_input.js.
+	_escape_for_format(value, df) {
+		const PLAIN_TEXT_FIELDTYPES = [
+			"Data",
+			"Long Text",
+			"Small Text",
+			"Text",
+			"Password",
+			"MultiSelect",
+		];
+		if (df && PLAIN_TEXT_FIELDTYPES.includes(df.fieldtype)) {
+			return frappe.utils.escape_html(cstr(value));
+		}
+		return value;
+	}
+
 	refresh_field(fieldname, txt) {
 		let fields =
 			this.grid.user_defined_columns && this.grid.user_defined_columns.length > 0
@@ -1542,11 +1588,21 @@ export default class GridRow {
 
 		// format values if no frm
 		if (df && this.doc) {
-			txt = frappe.format(this.doc[fieldname], df, null, this.doc);
+			txt = frappe.format(
+				this._escape_for_format(this.doc[fieldname], df),
+				df,
+				null,
+				this.doc
+			);
 		}
 
 		if (!txt && this.frm) {
-			txt = frappe.format(this.doc[fieldname], df, null, this.frm.doc);
+			txt = frappe.format(
+				this._escape_for_format(this.doc[fieldname], df),
+				df,
+				null,
+				this.frm.doc
+			);
 		}
 
 		// reset static value

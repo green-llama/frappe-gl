@@ -76,8 +76,8 @@ frappe.views.Workspace = class Workspace {
 		this.$page = $(`<div class="editor-js-container"></div>`).appendTo(this.body);
 	}
 
-	get_pages() {
-		return frappe.xcall("frappe.desk.desktop.get_workspace_sidebar_items", null, "GET");
+	get_workspaces() {
+		return frappe.xcall("frappe.desk.desktop.get_workspaces", null, "GET");
 	}
 
 	show() {
@@ -137,12 +137,7 @@ frappe.views.Workspace = class Workspace {
 	get_page_to_show() {
 		let default_page;
 
-		if (frappe.boot.user.default_workspace) {
-			default_page = {
-				name: frappe.boot.user.default_workspace.name,
-				public: frappe.boot.user.default_workspace.public,
-			};
-		} else if (
+		if (
 			localStorage.current_page &&
 			this.workspaces.filter((page) => page.name == localStorage.current_page).length != 0
 		) {
@@ -222,7 +217,8 @@ frappe.views.Workspace = class Workspace {
 					route: "#",
 				});
 				if (!this.add_workspace_controls) {
-					let workspace_actions_button = this.page.add_action_icon("ellipsis");
+					let workspace_actions_button = this.page.add_action_icon("ellipsis", "", "");
+					$(workspace_actions_button).removeAttr("data-original-title");
 					$(workspace_actions_button).removeClass("btn-default");
 					frappe.ui.create_menu({
 						parent: $(workspace_actions_button),
@@ -243,16 +239,6 @@ frappe.views.Workspace = class Workspace {
 								},
 								condition: () => {
 									return current_page.is_editable;
-								},
-							},
-							{
-								label: "New",
-								icon: "plus",
-								onClick: function () {
-									me.initialize_new_page(true);
-								},
-								condition: () => {
-									return me.has_create_access;
 								},
 							},
 						],
@@ -425,6 +411,7 @@ frappe.views.Workspace = class Workspace {
 				frappe.set_route(`workspace/${page.name}`);
 			});
 		}
+		this.add_workspace_controls = false;
 	}
 
 	make_blocks_sortable() {
@@ -537,6 +524,7 @@ frappe.views.Workspace = class Workspace {
 				let blocks = [
 					{
 						type: "header",
+
 						data: { text: values.title },
 					},
 				];
@@ -578,8 +566,9 @@ frappe.views.Workspace = class Workspace {
 							}
 
 							this.create_page(new_page).then(() => {
-								let pre_url = new_page.public ? "" : "private/";
-								let route = pre_url + frappe.router.slug(new_page.title);
+								let route = frappe.router.slug(
+									new_page.public ? new_page.name : "private/" + new_page.name
+								);
 								frappe.set_route(route);
 							});
 						});
@@ -710,7 +699,6 @@ frappe.views.Workspace = class Workspace {
 			spacer: this.blocks["spacer"],
 			HeaderSize: frappe.workspace_block.tunes["header_size"],
 		};
-
 		this.editor = new EditorJS({
 			data: {
 				blocks: blocks || [],
@@ -720,6 +708,26 @@ frappe.views.Workspace = class Workspace {
 			readOnly: true,
 			logLevel: "ERROR",
 		});
+		if (blocks.length == 0) {
+			let message = __("Welcome to the {0} workspace", [this.page.title]);
+			let default_block = [
+				{
+					type: "header",
+					data: { text: message },
+				},
+			];
+			if (this.has_access) {
+				default_block.push({
+					type: "paragraph",
+					data: {
+						text: __("Click on {0} to edit", [frappe.utils.icon("ellipsis")]),
+					},
+				});
+			}
+			this.editor.isReady.then(() => {
+				this.editor.render({ blocks: default_block });
+			});
+		}
 	}
 
 	save_page(page) {
@@ -779,9 +787,9 @@ frappe.views.Workspace = class Workspace {
 								indicator: "green",
 							});
 							if (page.public) {
-								frappe.set_route("desk", page.title.toLowerCase());
+								frappe.set_route("desk", frappe.router.slug(page.name));
 							} else {
-								frappe.set_route("desk", "private", page.title.toLowerCase());
+								frappe.set_route("desk", "private", frappe.router.slug(page.name));
 							}
 						}
 					},
@@ -797,7 +805,7 @@ frappe.views.Workspace = class Workspace {
 	reload() {
 		delete this.pages[this._page.name];
 		this._page = null;
-		return this.get_pages().then((r) => {
+		return this.get_workspaces().then((r) => {
 			frappe.boot.workspaces = r;
 			this.setup_pages(frappe.boot.workspaces.pages);
 			this.show();

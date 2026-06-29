@@ -27,8 +27,7 @@ frappe.search.AwesomeBar = class AwesomeBar {
 			setTimeout(() => input.focus(), 10);
 		});
 
-		let search_modal_body = `<div class="align-baseline flex py-2 px-1 relative navbar-modal-wrapper">
-			<div class="modal-search-icon absolute pr-2 pl-2">${frappe.utils.icon("search")}</div>
+		let search_modal_body = `<div class="align-baseline flex p-2 relative navbar-modal-wrapper">
 			<input
 				id="navbar-search"
 				type="text"
@@ -41,18 +40,23 @@ frappe.search.AwesomeBar = class AwesomeBar {
 		let search_modal_footer = `<div class="awesomebar-modal-footer flex justify-between w-100">
 			<div class="help-navigation">
 				<span class="help-item-navigate">
-					<span class="help-item">${frappe.utils.icon("arrow-up")}</span>
-					<span class="help-item">${frappe.utils.icon("arrow-down")}</span>
+					<span class="help-item">${frappe.utils.icon("arrow-up", "xs")}</span>
+					<span class="help-item">${frappe.utils.icon("arrow-down", "xs")}</span>
 					<span>${__("to navigate")}</span>
 				</span>
 				<span class="help-item-navigate">
-					<span class="help-item">${frappe.utils.icon("corner-down-left")}</span>
+					<span class="help-item">${frappe.utils.icon("corner-down-left", "xs")}</span>
 					<span>${__("to select")}</span>
 				</span>
-				<span class="help-item help-item-esc">${__("esc")}</span>
-				<span>${__("to close")}</span>
+				<span class="help-item-navigate">
+					<span class="help-item help-item-escape">${frappe.utils.is_mac() ? "⌘K" : "Ctrl+K"}</span>
+					<span>${__("to close")}</span>
+				</span>
+				<span class="help-item-navigate">
+					<span class="help-item help-item-escape">${frappe.utils.is_mac() ? "⌘G" : "Ctrl+G"}</span>
+					<span>${__("to open Global Search")}</span>
+				</span>
 			</div>
-			<div class="pointer">${frappe.utils.icon("circle-question-mark")}</div>
 		</div>`;
 
 		search_modal.find(".modal-body").css("padding", "0").html(search_modal_body);
@@ -62,11 +66,12 @@ frappe.search.AwesomeBar = class AwesomeBar {
 			.removeClass("hide")
 			.addClass("cool-awesomebar-modal-footer")
 			.html(search_modal_footer);
-		search_modal.find(".pointer").on("click", () => {
-			this.show_help();
-		});
 
 		$search_element.on("click", () => {
+			if ($(search_modal).hasClass("show")) {
+				search_modal.modal("hide");
+				return;
+			}
 			search_modal.modal("show");
 
 			if (is_event_listeners_added) return;
@@ -86,6 +91,21 @@ frappe.search.AwesomeBar = class AwesomeBar {
 			maxItems: 99,
 			autoFirst: true,
 			list: [],
+			container: function (input) {
+				let container = document.createElement("div");
+				container.className = "awesomplete";
+				let input_row = document.createElement("div");
+				input_row.className = "awesomebar-input-row";
+				let icon = document.createElement("span");
+				icon.className = "awesomebar-search-icon";
+				icon.setAttribute("aria-hidden", "true");
+				icon.innerHTML = frappe.utils.icon("search", "sm");
+				input.parentNode.insertBefore(container, input);
+				input_row.appendChild(icon);
+				input_row.appendChild(input);
+				container.appendChild(input_row);
+				return container;
+			},
 			filter: function (text, term) {
 				return true;
 			},
@@ -110,6 +130,9 @@ frappe.search.AwesomeBar = class AwesomeBar {
 				if (d.type == "Desktop Icon") {
 					target = frappe.utils.get_route_for_icon(d.icon_data);
 					d.route = target;
+					d.route_options = {
+						sidebar: d.icon_data.label,
+					};
 				}
 				let html = `<span>${__(d.label || d.value)}</span>`;
 
@@ -158,6 +181,12 @@ frappe.search.AwesomeBar = class AwesomeBar {
 				}
 
 				awesomplete.list = me.deduplicate(me.options);
+
+				// hide footer and remove spacing when there are no results
+				$(this.awesomplete.ul).toggleClass("p-0 m-0", cint(me.options?.length) == 0);
+				search_modal
+					.find(".cool-awesomebar-modal-footer")
+					.toggleClass("hide", cint(me.options?.length) == 0);
 			}, 50)
 		);
 
@@ -213,48 +242,6 @@ frappe.search.AwesomeBar = class AwesomeBar {
 				$input.trigger("blur");
 			}
 		});
-	}
-
-	show_help() {
-		const txt =
-			'<table class="table table-bordered">\
-			<tr><td style="width: 50%">' +
-			__("Create a new record") +
-			"</td><td>" +
-			__("new type of document") +
-			"</td></tr>\
-			<tr><td>" +
-			__("List a document type") +
-			"</td><td>" +
-			__("document type..., e.g. customer") +
-			"</td></tr>\
-			<tr><td>" +
-			__("Search in a document type") +
-			"</td><td>" +
-			__("text in document type") +
-			"</td></tr>\
-			<tr><td>" +
-			__("Tags") +
-			"</td><td>" +
-			__("tag name..., e.g. #tag") +
-			"</td></tr>\
-			<tr><td>" +
-			__("Open a module or tool") +
-			"</td><td>" +
-			__("module name...") +
-			"</td></tr>\
-			<tr><td>" +
-			__("Open in new tab") +
-			"</td><td>" +
-			(frappe.utils.is_mac() ? "⌘ + Enter" : "Ctrl + Enter") +
-			"</td></tr>\
-			<tr><td>" +
-			__("Calculate") +
-			"</td><td>" +
-			__("e.g. (55 + 434) / 4 or =Math.sin(Math.PI/2)...") +
-			"</td></tr>\
-		</table>";
-		frappe.msgprint(txt, __("Search Help"));
 	}
 
 	set_specifics(txt, end_txt) {

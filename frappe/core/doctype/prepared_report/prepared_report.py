@@ -87,18 +87,21 @@ class PreparedReport(Document):
 		)
 
 	def get_prepared_data(self, with_file_name=False):
-		if attachments := get_attachments(self.doctype, self.name):
-			attachment = None
-			for f in attachments or []:
-				if f.file_url.endswith(".gz"):
-					attachment = f
-					break
+		attachments = get_attachments(self.doctype, self.name)
+		if not attachments:
+			frappe.throw(_("No attachment found for the prepared report"), title=_("Attachment Not Found"))
 
-			attached_file = frappe.get_doc("File", attachment.name)
+		attachment = None
+		for f in attachments or []:
+			if f.file_url.endswith(".gz"):
+				attachment = f
+				break
 
-			if with_file_name:
-				return (gzip.decompress(attached_file.get_content()), attachment.file_name)
-			return gzip.decompress(attached_file.get_content())
+		attached_file = frappe.get_doc("File", attachment.name)
+
+		if with_file_name:
+			return (gzip.decompress(attached_file.get_content()), attachment.file_name)
+		return gzip.decompress(attached_file.get_content())
 
 
 def generate_report(prepared_report):
@@ -125,10 +128,26 @@ def generate_report(prepared_report):
 		create_json_gz_file(result, instance.doctype, instance.name, instance.report_name)
 
 		instance.status = "Completed"
+
+		frappe.get_doc(
+			{
+				"doctype": "Notification Log",
+				"subject": f"{instance.report_name} report is ready.",
+				"for_user": frappe.session.user,
+				"type": "Alert",
+				"document_type": "Report",
+				"document_name": report.name,
+				"link": f"/desk/query-report/{report.name}?prepared_report_name={instance.name}",
+			}
+		).insert(ignore_permissions=True)
+
 	except Exception:
 		# we need to ensure that error gets stored
 		_save_error(instance, error=frappe.get_traceback(with_context=True))
+		return
 
+	instance.reload()
+	instance.status = "Completed"
 	instance.report_end_time = frappe.utils.now()
 	instance.peak_memory_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 	add_data_to_monitor(peak_memory_usage=instance.peak_memory_usage)
@@ -363,7 +382,10 @@ def convert_json_to_csv(prepared_report_name):
 	writer = csv.DictWriter(output, fieldnames=fieldnames)
 	writer.writeheader()
 	for row in result:
-		writer.writerow({key: row.get(key, "") for key in fieldnames})
+		if isinstance(row, dict):
+			writer.writerow({key: row.get(key, "") for key in fieldnames})
+		else:
+			writer.writerow({field: row[idx] for idx, field in enumerate(fieldnames)})
 
 	csv_content = output.getvalue().encode("utf-8")
 

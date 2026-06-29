@@ -329,6 +329,9 @@ def get_messages_from_doctype(name):
 
 		if d.fieldtype == "Select" and d.options:
 			options = d.options.split("\n")
+			# for workflow state, we don't want to translate the icon(css classnames)
+			if d.fieldname == "icon" and name == "Workflow State":
+				continue
 			if "icon" not in options[0]:
 				messages.extend(options)
 		if d.fieldtype == "HTML" and d.options:
@@ -964,17 +967,20 @@ def print_language(language: str):
 
 	# remember original values
 	_lang = frappe.local.lang
-	_jenv = frappe.local.jenv
+	_jenv_restricted = getattr(frappe.local, "jenv_restricted", None)
+	_jenv_unrestricted = getattr(frappe.local, "jenv_unrestricted", None)
 
 	# set language, empty any existing lang_full_dict and jenv
 	frappe.local.lang = language
-	frappe.local.jenv = None
+	frappe.local.jenv_restricted = None
+	frappe.local.jenv_unrestricted = None
 
 	yield
 
 	# restore original values
 	frappe.local.lang = _lang
-	frappe.local.jenv = _jenv
+	frappe.local.jenv_restricted = _jenv_restricted
+	frappe.local.jenv_unrestricted = _jenv_unrestricted
 
 
 # Backward compatibility

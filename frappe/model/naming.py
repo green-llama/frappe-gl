@@ -6,10 +6,8 @@ import datetime
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
-from uuid import UUID
-
-import uuid_utils
+from typing import TYPE_CHECKING
+from uuid import UUID, uuid7
 
 import frappe
 from frappe import _
@@ -166,8 +164,8 @@ def set_new_name(doc):
 
 	if meta.autoname == "UUID":
 		if not doc.name:
-			doc.name = str(uuid_utils.uuid7())
-		elif isinstance(doc.name, UUID | uuid_utils.UUID):
+			doc.name = str(uuid7())
+		elif isinstance(doc.name, UUID):
 			doc.name = str(doc.name)
 		elif isinstance(doc.name, str):  # validate
 			try:
@@ -463,9 +461,16 @@ def revert_series_if_last(key, name, doc=None):
 		prefix = key
 
 	if "." in prefix:
-		prefix = parse_naming_series(prefix.split("."), doc=doc)
-
-	count = cint(name.replace(prefix, ""))
+		# Prefix has placeholders (e.g. date parts .YYYY./.MM./.DD.). Resolving them against
+		# the current date breaks reverts when a document is deleted on a different day than
+		# it was created. The resolved prefix length is date-independent (YYYY is always 4
+		# chars, MM 2, etc.), so resolve only to learn the length, then slice the prefix and
+		# counter from the document's own name.
+		boundary = len(parse_naming_series(prefix.split("."), doc=doc))
+		count = cint(name[boundary:])
+		prefix = name[:boundary]
+	else:
+		count = cint(name.replace(prefix, ""))
 	series = DocType("Series")
 	current = (frappe.qb.from_(series).where(series.name == prefix).for_update().select("current")).run()
 

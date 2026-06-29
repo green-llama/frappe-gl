@@ -8,6 +8,14 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 		this.sibling_workspaces = this.fetch_related_icons();
 		this.dropdown_items = [
 			{
+				name: "desktop",
+				label: __("Desktop"),
+				icon: "home",
+				onClick: function (el) {
+					frappe.set_route("/desk");
+				},
+			},
+			{
 				name: "workspaces",
 				label: "Workspaces",
 				icon: "wallpaper",
@@ -17,12 +25,15 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 				items: this.sibling_workspaces,
 			},
 			{
-				name: "desktop",
-				label: __("Desktop"),
-				icon: "layout-grid",
-				onClick: function (el) {
-					frappe.set_route("/desk");
+				name: "website",
+				label: __("Website"),
+				icon: "web",
+				onClick: function () {
+					window.open(window.location.origin);
 				},
+			},
+			{
+				is_divider: true,
 			},
 			{
 				name: "edit-sidebar",
@@ -36,11 +47,9 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 				},
 			},
 			{
-				name: "website",
-				label: __("Website"),
-				icon: "web",
-				onClick: function () {
-					window.open(window.location.origin);
+				is_divider: true,
+				condition: function () {
+					return frappe.boot.developer_mode;
 				},
 			},
 		];
@@ -48,15 +57,18 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 			let is_dark = frappe.ui.get_current_theme() === "dark";
 			this.dropdown_items.push(
 				{
-					name: "help",
-					label: "Help",
-					icon: "info",
-					items: this.get_help_siblings(),
+					name: "display",
+					label: "Display",
+					icon: "monitor",
+					items: this.get_display_siblings(is_dark),
 				},
 				{
 					label: "Session Defaults",
 					action: "frappe.ui.toolbar.setup_session_defaults()",
 					is_standard: 1,
+					condition: function () {
+						return frappe.boot.session_defaults.length != 0;
+					},
 					icon: "sliders-horizontal",
 				},
 				{
@@ -64,27 +76,39 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 					action: "frappe.ui.toolbar.clear_cache()",
 					is_standard: 1,
 					icon: "rotate-ccw",
+					shortcut: "Shift+Ctrl+R",
 				},
 				{
-					label: "Toggle Full Width",
-					action: "frappe.ui.toolbar.toggle_full_width()",
-					is_standard: 1,
-					icon: "maximize",
+					name: "help",
+					label: "Help",
+					icon: "info",
+					items: this.get_help_siblings(),
 				},
 				{
-					label: "Toggle Theme",
-					action: "new frappe.ui.ThemeSwitcher().show()",
-					is_standard: 1,
-					icon: is_dark ? "sun" : "moon",
+					is_divider: true,
+				},
+				{
+					name: "logout",
+					label: "Logout",
+					icon: "logout",
+					onClick: function () {
+						return frappe.app.logout();
+					},
 				}
 			);
 		}
+		this.add_navbar_items();
 		this.make();
 		this.setup_app_switcher();
 		this.populate_dropdown_menu();
 		this.setup_select_options();
 	}
-
+	add_navbar_items() {
+		frappe.boot.navbar_settings.settings_dropdown.forEach((item) => {
+			item.label = item.item_label;
+			this.dropdown_items.push(item);
+		});
+	}
 	fetch_related_icons() {
 		let sibling_workspaces = [];
 		let workspaces_not_to_show = ["My Workspaces"];
@@ -184,10 +208,15 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 		help_dropdown_items = custom_help_links.concat(help_dropdown_items);
 
 		navbar_settings.help_dropdown.forEach((element) => {
+			if (element.hidden) return;
+			if (element.condition && !frappe.utils.eval(element.condition)) return;
 			let dropdown_children = {
 				name: element.name,
 				label: element.item_label,
 			};
+			if (element.action?.includes("frappe.ui.toolbar.show_shortcuts")) {
+				dropdown_children.shortcut = "Shift+/";
+			}
 			if (element.item_type === "Route") {
 				dropdown_children.url = element.route;
 			}
@@ -200,6 +229,38 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 		});
 
 		return help_dropdown_items;
+	}
+
+	get_display_siblings(is_dark) {
+		const sidebar = this.sidebar;
+		return [
+			{
+				name: "toggle-theme",
+				label: __("Toggle Theme"),
+				icon: is_dark ? "sun" : "moon",
+				shortcut: "Shift+Ctrl+G",
+				onClick: function () {
+					new frappe.ui.ThemeSwitcher().show();
+				},
+			},
+			{
+				name: "toggle-full-width",
+				label: __("Toggle Full Width"),
+				icon: "maximize",
+				onClick: function () {
+					frappe.ui.toolbar.toggle_full_width();
+				},
+			},
+			{
+				name: "toggle-sidebar",
+				label: __("Toggle Sidebar"),
+				icon: "panel-right-open",
+				shortcut: "Ctrl+/",
+				onClick: function () {
+					sidebar.toggle_width();
+				},
+			},
+		];
 	}
 
 	get_custom_help_links() {
@@ -302,6 +363,13 @@ frappe.ui.SidebarHeader = class SidebarHeader {
 					}
 				</div>
 				<span class="menu-item-title">${item.label}</span>
+				${
+					item.shortcut
+						? `<span class="menu-item-shortcut">${frappe.ui.keys.get_shortcut_label(
+								item.shortcut
+						  )}</span>`
+						: ""
+				}
 			</a>
 		</div>`).appendTo(this.dropdown_menu);
 	}

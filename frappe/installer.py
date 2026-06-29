@@ -260,6 +260,8 @@ def parse_app_name(name: str) -> str:
 		else:
 			_repo = name.rsplit("/", 2)[2]
 		repo = _repo.split(".", 1)[0]
+	elif name in frappe.get_all_apps():
+		return name
 	else:
 		_, repo, _ = fetch_details_from_tag(name)
 	return repo
@@ -357,6 +359,7 @@ def add_to_installed_apps(app_name, rebuild_website=True):
 
 	frappe.get_single("Installed Applications").update_versions()
 	frappe.db.commit()
+	_sync_installed_apps_to_site_config()
 
 
 def remove_from_installed_apps(app_name):
@@ -372,6 +375,7 @@ def remove_from_installed_apps(app_name):
 		frappe.db.commit()
 		if frappe.flags.in_install:
 			post_install()
+		_sync_installed_apps_to_site_config()
 
 
 def remove_app(app_name, dry_run=False, yes=False, no_backup=False, force=False):
@@ -623,6 +627,14 @@ def make_site_config(
 
 		with open(site_file, "w") as f:
 			f.write(json.dumps(site_config, indent=1, sort_keys=True))
+
+
+def _sync_installed_apps_to_site_config():
+	"""Mirror the installed-apps list into site_config.json for fast reads without a DB round-trip."""
+	try:
+		update_site_config("installed_apps", frappe.get_installed_apps())
+	except Exception:
+		pass
 
 
 def update_site_config(key, value, validate=True, site_config_path=None):

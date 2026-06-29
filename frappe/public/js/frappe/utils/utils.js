@@ -243,6 +243,12 @@ Object.assign(frappe.utils, {
 		return String(txt).replace(/[&<>"'`=]/g, (char) => escape_html_mapping[char] || char);
 	},
 
+	// Escape text and wrap in <strong> — use this instead of String.prototype.bold()
+	// so user-supplied values are safely escaped before being injected into HTML.
+	bold: function (txt) {
+		return `<strong>${frappe.utils.escape_html(cstr(txt))}</strong>`;
+	},
+
 	unescape_html: function (txt) {
 		let unescape_html_mapping = {
 			"&amp;": "&",
@@ -1310,7 +1316,7 @@ Object.assign(frappe.utils, {
 		if (!desktop_icon) return;
 		let item = {};
 		if (desktop_icon.link_type == "External" && desktop_icon.link) {
-			route = window.location.origin + desktop_icon.link;
+			route = desktop_icon.link;
 		} else {
 			let sidebar = frappe.boot.workspace_sidebar_item[desktop_icon.label.toLowerCase()];
 			if (desktop_icon.link_type == "Workspace Sidebar" && sidebar) {
@@ -1386,12 +1392,8 @@ Object.assign(frappe.utils, {
 		return icon_html.get(0).outerHTML;
 	},
 	desktop_pallete: {
-		blue: "#0981E3",
+		blue: "#0289F7",
 		gray: "#7B808A",
-	},
-	desktop_bg_color(color_name) {
-		let color_value = this.desktop_pallete[color_name];
-		color_value + "";
 	},
 	icon(
 		icon_name,
@@ -1437,9 +1439,24 @@ Object.assign(frappe.utils, {
 		return `<img loading="lazy" src="https://flagcdn.com/${country_code}.svg" width="20" height="15">`;
 	},
 
-	is_emoji(emoji_name) {
-		let emojiList = gemoji.map((emoji) => emoji.emoji);
-		return emojiList.includes(emoji_name);
+	is_emoji(str) {
+		return /^\p{Extended_Pictographic}(‍\p{Extended_Pictographic}|️|⃣)*$/u.test(str);
+	},
+
+	get_emojis() {
+		const ranges = [
+			[0x1f600, 0x1f64f], // Emoticons
+			[0x1f300, 0x1f5ff], // Misc Symbols and Pictographs
+			[0x1f680, 0x1f6ff], // Transport and Map
+			[0x1f900, 0x1f9ff], // Supplemental Symbols and Pictographs
+			[0x1fa00, 0x1fa6f], // Chess Symbols
+			[0x1fa70, 0x1faff], // Symbols and Pictographs Extended-A
+			[0x2600, 0x26ff], // Misc Symbols
+			[0x2700, 0x27bf], // Dingbats
+		];
+		return ranges.flatMap(([start, end]) =>
+			Array.from({ length: end - start + 1 }, (_, i) => String.fromCodePoint(start + i))
+		);
 	},
 
 	get_desktop_icon(icon_name, variant) {
@@ -1577,6 +1594,12 @@ Object.assign(frappe.utils, {
 				route = item.name;
 			} else if (type === "dashboard") {
 				route = `dashboard-view/${item.name}`;
+			} else if (type == "workspace") {
+				if (item.public) {
+					route = frappe.router.slug(item.name);
+				} else {
+					route = "private/" + frappe.router.slug(item.name);
+				}
 			}
 		} else {
 			route = item.route;
@@ -1606,8 +1629,13 @@ Object.assign(frappe.utils, {
 		 *	max_no_of_decimals - max number of decimals of the shortened number
 		 */
 
+		// return empty for null, undefined, or empty string
+		if (!number || isNaN(number)) {
+			return "";
+		}
+
 		// return number if total digits is lesser than min_length
-		const len = String(number).match(/\d/g).length;
+		const len = String(number).match(/\d/g)?.length || 0;
 		if (len < min_length) {
 			return number.toString();
 		}
@@ -2181,5 +2209,40 @@ Object.assign(frappe.utils, {
 			links.push({ is_divider: true });
 		}
 		return links;
+	},
+	eval_expression(value, number_format) {
+		if (typeof value === "string") {
+			const parsed_components = value.match(/[^\d.,]+|[\d.,]+/g);
+			var parsed_value = value;
+			if (parsed_components !== null) {
+				parsed_value = parsed_components
+					.map((v) => {
+						return isNaN(parseFloat(v)) ? v : flt(v, null, number_format);
+					})
+					.join("");
+			}
+			if (parsed_value.match(/^[0-9+\-/*.() ]+$/)) {
+				// If it is a string containing operators
+				try {
+					return (0, eval)(parsed_value);
+				} catch (e) {
+					// bad expression
+					return value;
+				}
+			}
+		}
+		return value;
+	},
+	get_installed_apps() {
+		return frappe.boot.app_data.map((app) => {
+			return app.app_name;
+		});
+	},
+	is_sub_array(big, small) {
+		let i = 0;
+		for (let num of big) {
+			if (num === small[i]) i++;
+		}
+		return i === small.length;
 	},
 });

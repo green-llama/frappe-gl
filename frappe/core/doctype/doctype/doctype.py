@@ -101,6 +101,7 @@ class DocType(Document):
 
 		actions: DF.Table[DocTypeAction]
 		allow_auto_repeat: DF.Check
+		allow_bulk_edit: DF.Check
 		allow_copy: DF.Check
 		allow_events_in_timeline: DF.Check
 		allow_guest_to_view: DF.Check
@@ -680,7 +681,7 @@ class DocType(Document):
 				where doctype=%s and field='name' and value = %s""",
 				(new, new, old),
 			)
-		else:
+		elif not self.is_virtual:
 			frappe.db.rename_table(old, new)
 			frappe.db.commit()
 
@@ -989,7 +990,13 @@ class DocType(Document):
 		self.append("fields", {"label": "Is Group", "fieldtype": "Check", "fieldname": "is_group"})
 		self.append(
 			"fields",
-			{"label": "Old Parent", "fieldtype": "Link", "options": self.name, "fieldname": "old_parent"},
+			{
+				"label": "Old Parent",
+				"fieldtype": "Link",
+				"options": self.name,
+				"fieldname": "old_parent",
+				"hidden": 1,
+			},
 		)
 
 		parent_field_label = f"Parent {self.name}"
@@ -1757,7 +1764,6 @@ def validate_fields(meta: Meta):
 
 def get_fields_not_allowed_in_list_view(meta) -> list[str]:
 	not_allowed_in_list_view = list(copy.copy(no_value_fields))
-	not_allowed_in_list_view.append("Attach Image")
 	if meta.istable:
 		not_allowed_in_list_view.remove("Button")
 		not_allowed_in_list_view.remove("HTML")

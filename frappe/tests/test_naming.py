@@ -2,9 +2,9 @@
 # License: MIT. See LICENSE
 
 import time
+import uuid
 from uuid import UUID
 
-import uuid_utils
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_full_jitter
 
 import frappe
@@ -215,6 +215,22 @@ class TestNaming(IntegrationTestCase):
 
 		self.assertEqual(current_index.get("current"), 2)
 
+		frappe.db.delete("Series", {"name": series})
+
+	def test_revert_series_date_based_cross_date(self):
+		# A date-templated series must revert against the date embedded in the name,
+		# not the current date. Deleting a doc created on a different day should still
+		# decrement that day's counter.
+		key = "PO-.YYYY.-.MM.-.DD.-.###"
+		series = "PO-2020-01-01-"
+		name = "PO-2020-01-01-005"
+		frappe.db.delete("Series", {"name": series})
+		frappe.db.sql("""INSERT INTO `tabSeries` (name, current) values (%s, 5)""", (series,))
+		revert_series_if_last(key, name)
+		current_index = frappe.db.sql(
+			"""SELECT current from `tabSeries` where name = %s""", series, as_dict=True
+		)[0]
+		self.assertEqual(current_index.get("current"), 4)
 		frappe.db.delete("Series", {"name": series})
 
 	def test_naming_for_cancelled_and_amended_doc(self):
@@ -430,12 +446,12 @@ class TestNaming(IntegrationTestCase):
 		self.assertEqual(uid.version, 7)  # Default version
 
 		# Applications can specify UUID themselves, useful for APIs to set name themselves.
-		for uid in (uuid_utils.uuid4(), uuid_utils.uuid7()):
+		for uid in (uuid.uuid4(), uuid.uuid7()):
 			doc = frappe.new_doc(uuid_doctype, name=uid).insert()
 			self.assertEqual(doc.name, str(uid))
 
 		# Can specify valid UUID strings too
-		for uid in (uuid_utils.uuid4(), uuid_utils.uuid7()):
+		for uid in (uuid.uuid4(), uuid.uuid7()):
 			doc = frappe.new_doc(uuid_doctype, name=str(uid)).insert()
 			self.assertEqual(doc.name, str(uid))
 
